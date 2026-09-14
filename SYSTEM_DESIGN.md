@@ -49,16 +49,16 @@ I would not run `/summary` off S3. That would mean opening a bunch of files ever
 
 **If I do not split the data:** Kafka with one partition = one consumer, it falls behind. One giant Postgres table/index = range queries get slower every day. S3 with no date/device folders = you search the whole bucket.
 
-## What happens in the three cases they asked
+## Failure and load
 
-**An event arrives 45 minutes late, after we already returned a summary.**  
-It still goes Gateway → Kafka → consumer. We save it with the phone’s timestamp, not “now”. The next summary for that window includes it. We do not change the old HTTP response. I would not cache summaries at the start.
+**Event 45 minutes late, after a summary was already served.**  
+Still stored with the phone timestamp. Next query for that window includes it. Old HTTP 200 is not rewritten.
 
-**The same batch is sent 3 times.**  
-Ingest publishes 3 times. Kafka will have copies. The database unique key ignores extras. S3 might keep 3 files, which is fine — they are cheap. The phone can still get HTTP 200 on a retry.
+**Same batch retried 3 times.**  
+Kafka may have copies. `(device_id, event_time)` unique key drops extras. Client can get 200 on a retry.
 
-**Traffic jumps 10x in one minute.**  
-About 50k requests/sec. Gateway can throttle until we raise the limit. Kafka holds the extra. Consumers lag, we start more of them. ECS adds containers. Postgres/Timescale is what struggles if we try to write everything hot. Then we write S3 first or we sample. Ingest stays up because it only checks the batch and writes to Kafka.
+**Traffic ×10 in one minute.**  
+~50k req/s. Kafka holds it. We add consumers / ECS tasks. RDS is the bottleneck if we write everything hot; then S3-first or sample. Ingest only validates and publishes, so it stays up.
 
 ## Short version
 
