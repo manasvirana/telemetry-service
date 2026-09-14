@@ -26,7 +26,7 @@ That is a lot. You cannot keep all of it in one Postgres forever.
 
 1. Phone POSTs a batch to **API Gateway** (the public URL / HTTPS front door).
 2. Gateway sends it to my ingest app running on **ECS** (AWS running my container).
-3. Ingest does the same checks as this repo. Valid events go to **Kafka** (on AWS this is **MSK** — managed Kafka). I do not wait for the database on that HTTP call.
+3. Ingest does the same checks as this repo. Valid events go to **Kafka** (on AWS this is **MSK** managed Kafka). I do not wait for the database on that HTTP call.
 4. Kafka splits data by `device_id`, so one phone’s events stay in order on one partition.
 5. **Consumers** (more ECS apps) read from Kafka.
    - One writes the raw batch to **S3** (blob / files, cheap to keep).
