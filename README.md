@@ -62,6 +62,7 @@ Port 5433 because 5432 was already in use. `JAVA_TOOL_OPTIONS` is needed on Wind
 ### Ingest : 429 rate limit
 
 Code default is 50 ingest requests / second. For this screenshot I set it to 5 so I could hit 429 without a load generator, then set it back to 50.
+
 <img width="648" height="119" alt="image" src="https://github.com/user-attachments/assets/c934f4f0-d206-4c2e-8f09-5b8919682757" />
 
 
@@ -79,6 +80,13 @@ Code default is 50 ingest requests / second. For this screenshot I set it to 5 s
 ### Summary : 400 from > to
 
 <img width="1014" height="488" alt="image" src="https://github.com/user-attachments/assets/1b167018-64f8-4749-9b55-49af685cbef5" />
+
+### Unit tests
+
+`.\gradlew.bat test `
+
+<img width="825" height="289" alt="image" src="https://github.com/user-attachments/assets/18de5e95-83d5-48be-91f6-debee3c18f82" />
+
 
 
 ## Design Notes
