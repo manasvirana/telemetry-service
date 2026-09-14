@@ -1,61 +1,66 @@
 # Part 3 — System design
 
-In the interview I talked about API Gateway, Kafka, consumers, and storing data on AWS (including blob). This write-up is that same idea, filled in with the numbers from the brief.
+In the interview I said: requests hit API Gateway, Kafka holds the work, consumers process it, we store data on AWS (including blob storage). This is that same plan, with the numbers from the brief.
 
-The take-home is one box and Postgres. Below is what I would actually put in AWS if this was real traffic.
+The code I submitted is one app and Postgres. That is fine for the homework. It would not be enough for 10,000 phones.
 
 ## Numbers
 
 10,000 devices, each sending a batch about every 2 seconds:
 
-`10,000 / 2 = 5,000 requests/sec`
+`10,000 / 2 = 5,000 requests per second`
 
-The phones sample at 10–50 Hz. I picked 30 as a boring middle:
+Each phone samples 10–50 times a second. I used 30 as a middle value:
 
-`10,000 × 30 = 300,000 events/sec`
+`10,000 × 30 = 300,000 events per second`
 
-So a batch is ~60 events. That sits inside the 1–500 limit.
+That is about 60 events in each HTTP batch (inside the 1–500 limit).
 
-I assumed ~120 bytes per stored row (id, millis, eight doubles, some Postgres overhead). Not the JSON size.
+I treated one stored event as ~120 bytes (ids, time, GPS, accel, gyro — not the JSON text):
 
-`300,000 × 120 × 86,400 ≈ 3.1 TB/day`
+`300,000 × 120 × 86,400 ≈ 3.1 TB per day`
 
-That is before compression. That is also why I would not keep every row hot forever.
+That is a lot. You cannot keep all of it in one Postgres forever.
 
-## Flow
+## How a request would flow
 
-Phone hits API Gateway. Gateway forwards to an ingest service on ECS. That service checks the batch the same way this repo does, then puts valid events on Kafka. It does not wait for a DB write.
+1. Phone POSTs a batch to **API Gateway** (the public URL / HTTPS front door).
+2. Gateway sends it to my ingest app running on **ECS** (AWS running my container).
+3. Ingest does the same checks as this repo. Valid events go to **Kafka** (on AWS this is **MSK** — managed Kafka). I do not wait for the database on that HTTP call.
+4. Kafka splits data by `device_id`, so one phone’s events stay in order on one partition.
+5. **Consumers** (more ECS apps) read from Kafka.
+   - One writes the raw batch to **S3** (blob / files, cheap to keep).
+   - One writes rows into a query database so summary is a normal SQL query.
+6. The summary API is a separate small app. It only reads the query database. It does not read Kafka on each GET.
 
-Kafka topic is `telemetry-events`. Message key is `device_id` so one phone stays on one partition.
+I would not run `/summary` off S3. That would mean opening a bunch of files every time someone asks for avg speed.
 
-Consumers do the slow work. One writer puts the raw batch on S3. Another writer puts rows into a query DB so summary is a normal SQL range query.
+## What I would pick, and what I would not
 
-Summary is a different ECS service. It only reads the query DB. It does not consume Kafka on the request path.
+**API Gateway** — one URL, HTTPS, can throttle. I would not put the database behind Gateway. Gateway is just the door.
 
-I would not query S3 for avg speed. You would end up opening a bunch of files every time.
+**Kafka (MSK)** — buffer. If ingest is slow or a consumer dies, messages wait here and we can replay. I would not use **SQS** (a simple queue): ordering per phone is weak, and you cannot rewind easily. **Kinesis** can also stream, but I already know Kafka.
 
-## Choices
+**ECS** — run ingest, consumers, and the query API as containers. **Lambda** (run a function per request) is a poor fit for a steady 5,000 requests/sec.
 
-**Front door:** API Gateway HTTP API → ECS. I want one URL, TLS, and throttling in one place. I would not put SQS here, Kafka is already the buffer. Gateway should stay the front door, not the place that talks to the DB.
+**Query store: TimescaleDB on RDS** (Postgres with time-series support). Same unique `(device_id, event_time)` as the homework. I can keep `AVG`, `MAX(sqrt(...))`, and `ON CONFLICT DO NOTHING`. **Timestream** is AWS’s time-series DB but the queries would change and upserts are awkward. **DynamoDB** is good at “get one item by key”, not “average this device over a time range”.
 
-**Buffer:** Amazon MSK. I have used Kafka, I know consumer groups and replay. Key = `device_id`. Kinesis can do this job but I would rather not relearn the APIs. SQS is a queue. Ordering is weak and you cannot rewind, which is a bad mix at 300k events/s.
+**S3** — dump of raw batches, folder-style prefix by date and device. If I need to re-read a day I can use **Athena** (SQL over S3 files).
 
-**Compute:** ECS Fargate for ingest, consumers, and query. This load is always on. Lambda at 5k req/s is a lot of invocations for no real gain.
+**If I do not split the data:** Kafka with one partition = one consumer, it falls behind. One giant Postgres table/index = range queries get slower every day. S3 with no date/device folders = you search the whole bucket.
 
-**Query DB:** TimescaleDB on RDS (Aurora is fine too). Same unique `(device_id, event_time)` idea as the take-home. I already have `AVG` and `MAX(sqrt(...))` in SQL, and `ON CONFLICT DO NOTHING` still works. Timestream is more "AWS native" but upserts are annoying and I would have to rewrite the queries. Dynamo is good at point reads, not this aggregation.
+## What happens in the three cases they asked
 
-**Archive:** S3, prefix by date and device. If I need to re-run a day I can use Athena. At ~3 TB/day, keeping everything in RDS fills the disk and vacuum never keeps up.
+**An event arrives 45 minutes late, after we already returned a summary.**  
+It still goes Gateway → Kafka → consumer. We save it with the phone’s timestamp, not “now”. The next summary for that window includes it. We do not change the old HTTP response. I would not cache summaries at the start.
 
-**No partition:** Kafka with one partition means one consumer and lag immediately. One giant Timescale/Postgres index means range scans get worse every day. S3 with no date/device prefix means you list the whole bucket.
+**The same batch is sent 3 times.**  
+Ingest publishes 3 times. Kafka will have copies. The database unique key ignores extras. S3 might keep 3 files, which is fine — they are cheap. The phone can still get HTTP 200 on a retry.
 
-## Failures
+**Traffic jumps 10x in one minute.**  
+About 50k requests/sec. Gateway can throttle until we raise the limit. Kafka holds the extra. Consumers lag, we start more of them. ECS adds containers. Postgres/Timescale is what struggles if we try to write everything hot. Then we write S3 first or we sample. Ingest stays up because it only checks the batch and writes to Kafka.
 
-**Late event (45 min), summary already returned.** It still goes through Kafka and gets stored with the event time, not "now". Next summary for that window will include it. I do not go back and change the old response. I would not cache summaries at the start.
+## Short version
 
-**Batch retried 3 times.** Ingest publishes 3 times. Kafka will have copies. The DB unique key drops the extras. S3 might keep 3 objects, which is fine — they are cheap. The phone can get a 200 on a retry.
-
-**10x traffic in a minute.** ~50k req/s. Gateway can throttle until we raise the limit. Kafka holds the spike. Consumers fall behind, we add more. ECS scales. RDS is what struggles if we try to write all of it hot. Then we write S3 first or we sample. Ingest stays up because it only validates and produces.
-
-## Conclusion
-
-This homework: one process, Postgres, unique key. Real version: Gateway, Kafka, consumers, S3 for raw files, Timescale for queries, partition on `device_id`. Ingest only validates and publishes. Summary stays a SQL query.
+Homework: one process, Postgres, unique key.  
+Production: Gateway in front, Kafka in the middle, consumers in the back, S3 for raw files, Timescale for queries, split by `device_id`. Ingest only validates and publishes. Summary is still a SQL query.
