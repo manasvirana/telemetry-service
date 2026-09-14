@@ -1,4 +1,4 @@
-# Part 3 — System design
+# Part 3 : System design
 
 In the interview I talked about API Gateway, Kafka, consumers, and storing data on AWS (including blob). This write-up is that same idea, filled in with the numbers from the brief.
 
