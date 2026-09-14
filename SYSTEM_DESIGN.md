@@ -37,15 +37,15 @@ I would not run `/summary` off S3. That would mean opening a bunch of files ever
 
 ## What I would pick, and what I would not
 
-**API Gateway** — one URL, HTTPS, can throttle. I would not put the database behind Gateway. Gateway is just the door.
+**API Gateway** : one URL, HTTPS, can throttle. I would not put the database behind Gateway. Gateway is just the door.
 
-**Kafka (MSK)** — buffer. If ingest is slow or a consumer dies, messages wait here and we can replay. I would not use **SQS** (a simple queue): ordering per phone is weak, and you cannot rewind easily. **Kinesis** can also stream, but I already know Kafka.
+**Kafka (MSK)** : buffer. If ingest is slow or a consumer dies, messages wait here and we can replay. I would not use **SQS** (a simple queue): ordering per phone is weak, and you cannot rewind easily. **Kinesis** can also stream, but I already know Kafka.
 
-**ECS** — run ingest, consumers, and the query API as containers. **Lambda** (run a function per request) is a poor fit for a steady 5,000 requests/sec.
+**ECS** : run ingest, consumers, and the query API as containers. **Lambda** (run a function per request) is a poor fit for a steady 5,000 requests/sec.
 
 **Query store: TimescaleDB on RDS** (Postgres with time-series support). Same unique `(device_id, event_time)` as the homework. I can keep `AVG`, `MAX(sqrt(...))`, and `ON CONFLICT DO NOTHING`. **Timestream** is AWS’s time-series DB but the queries would change and upserts are awkward. **DynamoDB** is good at “get one item by key”, not “average this device over a time range”.
 
-**S3** — dump of raw batches, folder-style prefix by date and device. If I need to re-read a day I can use **Athena** (SQL over S3 files).
+**S3** : dump of raw batches, folder-style prefix by date and device. If I need to re-read a day I can use **Athena** (SQL over S3 files).
 
 **If I do not split the data:** Kafka with one partition = one consumer, it falls behind. One giant Postgres table/index = range queries get slower every day. S3 with no date/device folders = you search the whole bucket.
 
