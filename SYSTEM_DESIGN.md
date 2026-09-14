@@ -1,4 +1,4 @@
-# Part 3 — System design
+# Part 3 : System design
 
 In the interview I said: requests hit API Gateway, Kafka holds the work, consumers process it, we store data on AWS (including blob storage). This is that same plan, with the numbers from the brief.
 
